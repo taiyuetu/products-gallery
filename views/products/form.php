@@ -23,7 +23,7 @@ $base     = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'])), '/')
     <i class="bi bi-<?= $isEdit ? 'pencil-square' : 'plus-circle' ?> text-primary me-1"></i>
     <?= e($title) ?>
     <?php if ($isEdit): ?>
-      <small class="text-muted fw-normal ms-2"># <?= e($product['tqb_code'] ?? '') ?></small>
+      <small class="text-muted fw-normal ms-2"># <?= e($product['primary_value'] ?? '') ?></small>
     <?php endif; ?>
   </h5>
 </div>

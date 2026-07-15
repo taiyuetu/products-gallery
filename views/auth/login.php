@@ -22,8 +22,8 @@
          style="width:64px;height:64px;">
       <i class="bi bi-database-fill brand-icon"></i>
     </div>
-    <h4 class="text-white fw-bold mb-0">产品数据库</h4>
-    <p class="text-white-50 small mt-1">请登录以继续</p>
+    <h4 class="text-white fw-bold mb-0">产品图库 SaaS</h4>
+    <p class="text-white-50 small mt-1">每位用户独立产品库 · 请登录以继续</p>
   </div>
 
   <!-- Card -->
@@ -33,6 +33,12 @@
       <?php if (!empty($setupDone)): ?>
       <div class="alert alert-success py-2 small mb-3">
         <i class="bi bi-check-circle me-1"></i>管理员账户已创建，请登录
+      </div>
+      <?php endif; ?>
+
+      <?php if (!empty($regDone)): ?>
+      <div class="alert alert-success py-2 small mb-3">
+        <i class="bi bi-check-circle me-1"></i>注册成功，请登录
       </div>
       <?php endif; ?>
 
@@ -87,6 +93,10 @@
             <i class="bi bi-box-arrow-in-right me-1"></i>登 录
           </button>
         </div>
+
+        <p class="text-center small text-muted mt-3 mb-0">
+          还没有账户？ <a href="?c=auth&a=register">立即注册</a>
+        </p>
 
       </form>
 

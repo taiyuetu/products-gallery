@@ -1,242 +1,104 @@
-# Product Database Web App (PHP + MySQL)
+# Product Gallery SaaS (PHP + MySQL) — v2.0
 
 **Version:** see [`VERSION`](VERSION) · **Changes:** see [`CHANGELOG.md`](CHANGELOG.md)
 
-A modular PHP + MySQL product management app with:
-
-- CSV import to database (supports Chinese text)
-- **Product image gallery** — multiple images per product; upload on create/edit, or bulk-attach via CSV import by matching the `TQB编码` filename
-- Full CRUD pages
-- Column-based filtering and global search
-- Export all products or filtered results to CSV
-- Category management
-- OEM matching tool
-- Authentication (first-run admin setup; admin-only destructive actions)
+Multi-tenant product catalog: **each user has a private product library**. Column fields are **not global** — they are created from each user’s uploaded CSV headers.
 
 ---
 
-## 1) Requirements
+## What’s new in 2.0 (breaking)
 
-- PHP 8.1+ (CLI enabled)
-- MySQL 5.7+ / 8.0+
-- PHP extensions: `mbstring`, `pdo_mysql`, `fileinfo`, `gd` (optional, only for future image processing)
+- Per-user data isolation (`user_id` on products, categories, uploads)
+- Dynamic schema via `user_fields` + product `attrs` JSON (no fixed wide columns)
+- Open **registration** alongside login
+- **字段管理** UI to toggle list/filter, set primary & OEM fields
+- Images stored under `public/uploads/products/{userId}/`
 
----
-
-## 2) Project Structure
-
-```text
-productsdata-gallery/
-├── index.php                 # front controller (routing: ?c=...&a=...)
-├── VERSION                   # current semver
-├── CHANGELOG.md              # release notes
-├── setup.sql                 # first-time DB setup (database: productsgallery)
-├── migrations/
-│   ├── 001_add_image_path.sql
-│   ├── 002_add_category_id.sql
-│   └── 003_convert_image_to_gallery.sql
-├── config/
-│   ├── database.example.php  # copy → database.php (gitignored)
-│   ├── database.php          # local credentials (do not commit)
-│   └── columns.php           # single source of truth for columns
-├── core/
-│   ├── Controller.php
-│   ├── Database.php
-│   ├── Model.php
-│   └── ImageHelper.php
-├── controllers/
-├── models/
-├── views/
-└── public/
-    ├── css/app.css
-    └── uploads/products/     # uploaded product images
-```
+Existing v1 fixed-column databases must run migration `004` (drops/rebuilds products & categories) and re-import CSVs.
 
 ---
 
-## 3) Database Setup
+## Requirements
 
-### First-time install
+- PHP 8.1+
+- MySQL 5.7+ / 8.0+ (JSON column support)
+- Extensions: `mbstring`, `pdo_mysql`, `fileinfo`
 
-1. Start MySQL service.
-2. Run `setup.sql` in your MySQL client (creates database `productsgallery`).
-3. Copy the example config and edit credentials:
+---
+
+## Setup
+
+1. Run [`setup.sql`](setup.sql) (creates DB `productsgallery` and v2 tables).
+2. Copy config:
 
 ```powershell
 copy config\database.example.php config\database.php
 ```
 
-```php
-// config/database.php
-return [
-    'host'     => 'localhost',
-    'port'     => 3306,              // match your MySQL port
-    'dbname'   => 'productsgallery',
-    'username' => 'root',
-    'password' => '',                // update this
-    'charset'  => 'utf8mb4',
-];
-```
-
-4. On first visit the app detects an empty `users` table and redirects to a one-time setup page to create the administrator account (password ≥ 8 characters).
-
-### Upgrading an existing database
-
-Run migrations in order if upgrading from an older schema:
-
-```sql
-USE productsgallery;
-SOURCE migrations/001_add_image_path.sql;
-SOURCE migrations/002_add_category_id.sql;
-SOURCE migrations/003_convert_image_to_gallery.sql;
-```
-
-Migration `003` converts single `image_path` into multi-image `gallery` (JSON array of relative paths) and drops `image_path`.
-
-Fresh installs from current `setup.sql` already include `gallery` and `category_id` — skip migrations.
-
----
-
-## 4) Run Locally
-
-In project root:
+3. Start:
 
 ```powershell
 php -S 127.0.0.1:3333 -t .
 ```
 
-Open <http://127.0.0.1:3333/> — first request redirects to login (or admin setup if no users exist).
+4. First visit → create admin (setup). Later users can **register** their own accounts.
 
----
+### Upgrading from v1.x
 
-## 5) Main Features
-
-### CSV Import
-
-- Entry: `?c=import&a=index`
-- Upload `.csv` file; encoding: Auto / GBK / UTF-8
-- Header names must match Chinese labels in `config/columns.php`
-- Rows with a **new TQB编码** → inserted
-- Rows with an **existing TQB编码** and a strict-subset OEM号码 (and no image to attach) → skipped
-- Rows with an **existing TQB编码** and additional OEM号码 → OEM merged (slash-separated, deduplicated) and other fields updated
-
-### Product image gallery
-
-Each product can have **multiple** images. Files live under `public/uploads/products/`; the DB stores a JSON array of relative paths in `products.gallery`.
-
-**Create / Edit** (`?c=product&a=create` / `edit`)
-
-- Multi-file upload with live preview
-- On edit: per-image remove checkboxes, or remove all
-- Allowed: `jpg`, `jpeg`, `png`, `gif`, `webp`; max 8 MB; MIME sniffed via `finfo`
-
-**Bulk attach via CSV import**
-
-1. Name each image after the row’s `TQB编码` (e.g. `TQB0-0002.jpg`). Multiple files for the same code (e.g. `TQB0-0002 (2).jpg`) merge into one gallery.
-2. On the import page, select the CSV and optionally the image files (Chrome/Edge: “选择整个文件夹”).
-3. Matched images are merged into each product’s gallery; unmatched uploads are deleted to avoid orphans.
-
-**Display**
-
-- List: thumbnail + count badge; click opens lightbox gallery
-- Detail: gallery grid with lightbox navigation
-
-### CRUD
-
-- List / create / show / edit / delete product
-- Clear ALL products: POST `?c=product&a=deleteAll` (**admin only**)
-- Category delete: **admin only**
-
-### Filtering, search, export
-
-- Global search + multi-column filters (`f[field]=value`)
-- Sort columns are whitelisted (safe ORDER BY)
-- Export all or filtered CSV (UTF-8 BOM); images are not embedded
-
-### OEM match
-
-- Upload a CSV with an `oem` column; match against stored OEM tokens (normalized spaces/hyphens); download matches
-
----
-
-## 6) Chinese Text / Encoding
-
-- MySQL/table charset: `utf8mb4`
-- PHP output: UTF-8
-- Use the import encoding selector for Excel-exported Chinese CSVs
-- Exported CSV includes UTF-8 BOM
-
----
-
-## 7) Extend Columns (Secondary Development)
-
-1. Add column in DB (`ALTER TABLE` + optional `migrations/` file)
-2. Add mapping in `config/columns.php` (`field`, `label`, `type`, `filterable`, `list`, `tab`)
-3. Add the field to `models/Product.php` `$fillable`
-
-List / filter / form / import / export pick up new fields from config.
-
-`gallery` is intentionally **not** in `columns.php` (not a CSV column); handled by `ProductController` / `ImportController` via `ImageHelper`.
-
-Bump `VERSION` and add a `CHANGELOG.md` entry when you ship a change.
-
----
-
-## 8) Upload Limits
-
-For large image batches, raise PHP limits in `php.ini`:
-
-```ini
-upload_max_filesize = 64M
-post_max_size       = 128M
-max_file_uploads    = 500
-memory_limit        = 256M
-max_execution_time  = 300
+```sql
+USE productsgallery;
+SOURCE migrations/004_saas_per_user_json.sql;
 ```
 
----
-
-## 9) Troubleshooting
-
-### Server starts but page shows error
-
-- Ensure MySQL is running
-- Copy/configure `config/database.php` from `database.example.php`
-- Confirm `setup.sql` was executed (`productsgallery`)
-- Upgrading? Run migrations `001` → `003` as needed
-
-### Images not appearing after import
-
-- Filename (without extension) must equal `TQB编码` (case-insensitive; copy suffixes like `(2)` / `副本` are stripped)
-- Confirm `public/uploads/products/` is writable
-- Check import result banner for match / missing counts
+This **deletes** old product/category rows. Re-import CSVs per user.
 
 ---
 
-## 10) Security / Production Notes
+## How fields work
 
-Designed for internal / LAN use. Before wider exposure:
+1. User uploads a CSV on **导入 CSV**.
+2. Headers become that user’s `user_fields` (new headers are added on later imports; old fields are not auto-deleted).
+3. First import: **first column = primary** (upsert + image filename match); a header matching OEM / `OEM号码` becomes the OEM field.
+4. Adjust in **字段管理**: list, filter, primary, OEM, active, order, tab group.
+5. Product values live in `products.attrs` JSON; `primary_value` / `oem_value` are denormalized for fast match.
 
-- HTTPS; secure session cookie flags
-- Keep using admin role for destructive actions; add user-management UI if needed
-- CSRF is already required on mutating POSTs
-- Do not commit `config/database.php`
-- Deny directory listing on `public/uploads/products/`
-- Backup uploads together with the database
-- Exception details go to the server log only (not the browser)
+Image files should be named after the **primary** field value (e.g. `SKU-001.jpg`).
 
 ---
 
-## 11) Version control
+## Features
 
-```powershell
-git status
-git log --oneline
+| Feature | Notes |
+|---------|--------|
+| Register / Login | Each account is an isolated tenant |
+| CSV import + images | Schema sync + upsert by primary |
+| CRUD | Forms/list/export driven by user’s fields |
+| OEM match | Uses that user’s OEM field / `oem_value` |
+| Categories | Per-user |
+| Clear my data | Deletes only the logged-in user’s products |
+
+---
+
+## Project structure
+
+```text
+index.php
+setup.sql
+migrations/004_saas_per_user_json.sql
+config/database.example.php
+core/          Auth, Controller, Database, Model, ImageHelper
+models/        User, UserField, Product, Category
+controllers/   Auth, Product, Import, Field, Match, Category
+views/
+public/uploads/products/{userId}/
 ```
 
-Release process:
+`config/columns.php` is deprecated (empty stub); do not use it for new fields.
 
-1. Update code
-2. Bump `VERSION`
-3. Add a section under `CHANGELOG.md`
-4. Commit and tag, e.g. `git tag v1.1.0`
+---
+
+## Security notes
+
+- Session auth + CSRF on POSTs
+- All catalog queries scoped by `user_id`
+- Designed for internal / LAN SaaS without billing; add HTTPS before public exposure

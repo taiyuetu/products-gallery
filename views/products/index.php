@@ -37,14 +37,12 @@ $getSortIcon = function($field) use ($sort, $order) {
     <span class="badge bg-secondary ms-1"><?= number_format($total) ?></span>
   </h5>
   <div class="d-flex gap-2">
-    <?php if (($_SESSION['role'] ?? '') === 'admin'): ?>
     <form method="POST" action="?c=product&a=deleteAll" class="m-0">
       <?= csrf_field() ?>
-      <button type="submit" class="btn btn-outline-danger btn-sm" onclick="return confirm('确定要清空所有产品数据吗？此操作不可恢复！');">
-        <i class="bi bi-trash me-1"></i>清空数据
+      <button type="submit" class="btn btn-outline-danger btn-sm" onclick="return confirm('确定要清空【您账户下】的所有产品数据吗？此操作不可恢复！');">
+        <i class="bi bi-trash me-1"></i>清空我的数据
       </button>
     </form>
-    <?php endif; ?>
     <a href="<?= e($exportUrl) ?>" class="btn btn-outline-success btn-sm">
       <i class="bi bi-download me-1"></i>导出 CSV<?= $activeFilters ? '（筛选结果）' : '（全部）' ?>
     </a>
@@ -53,6 +51,15 @@ $getSortIcon = function($field) use ($sort, $order) {
     </a>
   </div>
 </div>
+
+<?php if (empty($columns)): ?>
+<div class="alert alert-info">
+  <i class="bi bi-info-circle me-1"></i>
+  您的产品字段尚未定义。请先
+  <a href="?c=import&a=index" class="alert-link">导入 CSV</a>
+  ，系统将根据表头自动创建您的字段结构。
+</div>
+<?php endif; ?>
 
 <!-- ── Global Search ──────────────────────────────────────────────── -->
 <div class="card border-0 shadow-sm mb-3">
@@ -144,14 +151,13 @@ $getSortIcon = function($field) use ($sort, $order) {
           <th>图片</th>
           <th>分类</th>
           <?php foreach ($listCols as $col): ?>
-            <?php 
-              $isSortable = in_array($col['field'], ['tqb_code', 'car_series']);
-              $headerClass = $col['field'] === 'oem_number' ? 'oem-number-col' : ($col['field'] === 'car_model' ? 'car-model-col' : '');
+            <?php
+              $isSortable = !empty($col['is_primary']);
             ?>
-            <th class="<?= $headerClass ?>">
+            <th>
               <?php if ($isSortable): ?>
-                <a href="<?= $getSortUrl($col['field']) ?>" class="text-decoration-none text-dark d-flex align-items-center">
-                  <?= e($col['label']) ?> <?= $getSortIcon($col['field']) ?>
+                <a href="<?= $getSortUrl('primary_value') ?>" class="text-decoration-none text-dark d-flex align-items-center">
+                  <?= e($col['label']) ?> <?= $getSortIcon('primary_value') ?>
                 </a>
               <?php else: ?>
                 <?= e($col['label']) ?>
@@ -190,12 +196,12 @@ $getSortIcon = function($field) use ($sort, $order) {
             <?php if ($thumbUrl !== ''): ?>
               <div class="position-relative d-inline-block">
                 <img src="<?= e($thumbUrl) ?>"
-                     alt="<?= e($row['name'] ?? '') ?>"
+                     alt="<?= e($row['primary_value'] ?? '') ?>"
                      class="product-thumb rounded border lightbox-trigger"
                      style="width:48px;height:48px;object-fit:cover;cursor:zoom-in;"
                      data-gallery='<?= e(json_encode($galleryUrls, JSON_UNESCAPED_SLASHES)) ?>'
                      data-gallery-index="0"
-                     data-caption="<?= e(($row['tqb_code'] ?? '') . ' – ' . ($row['name'] ?? '')) ?>"
+                     data-caption="<?= e($row['primary_value'] ?? '') ?>"
                      title="点击查看大图">
                 <?php if ($galleryCount > 1): ?>
                   <span class="gallery-count-badge"><?= $galleryCount ?></span>
@@ -206,7 +212,7 @@ $getSortIcon = function($field) use ($sort, $order) {
                      style="width:48px;height:48px;cursor:pointer;margin:0;"
                      title="点击上传图片"
                      data-id="<?= (int)$row['id'] ?>"
-                     data-caption="<?= e(($row['tqb_code'] ?? '') . ' – ' . ($row['name'] ?? '')) ?>">
+                     data-caption="<?= e($row['primary_value'] ?? '') ?>">
                 <i class="bi bi-image opacity-50"></i>
                 <input type="file" accept="image/*" multiple class="d-none quick-upload-input">
               </label>
@@ -220,23 +226,10 @@ $getSortIcon = function($field) use ($sort, $order) {
             <?php endif; ?>
           </td>
           <?php foreach ($listCols as $col): ?>
-          <td class="<?= $col['field'] === 'oem_number' ? 'oem-number-col' : ($col['field'] === 'car_model' ? 'car-model-col' : '') ?>"><?php
+          <td><?php
             $val = $row[$col['field']] ?? '';
-            if ($col['field'] === 'stock_status' && $val !== '') {
-                $cls = match($val) {
-                    '有货'  => 'success',
-                    '缺货'  => 'danger',
-                    '预订'  => 'warning',
-                    default => 'secondary',
-                };
-                echo '<span class="badge bg-' . $cls . '">' . e($val) . '</span>';
-            } elseif ($col['field'] === 'warehouse_a' && $val !== '') {
-                $cls = $val === '可出' ? 'success' : 'secondary';
-                echo '<span class="badge bg-' . $cls . '">' . e($val) . '</span>';
-            } elseif ($col['field'] === 'oem_number' && $val !== '') {
+            if ($val !== '' && mb_strlen((string)$val) > 80) {
                 echo '<span class="long-text-cell" title="' . e($val) . '">' . e($val) . '</span>';
-            } elseif ($col['field'] === 'car_model' && $val !== '') {
-                echo '<span class="long-text-cell long-text-cell--sm" title="' . e($val) . '">' . e($val) . '</span>';
             } else {
                 echo e($val);
             }
@@ -254,7 +247,7 @@ $getSortIcon = function($field) use ($sort, $order) {
               <?= csrf_field() ?>
               <input type="hidden" name="id" value="<?= $row['id'] ?>">
               <button type="submit" class="btn btn-xs btn-outline-danger"
-                      data-confirm="确定要删除「<?= e($row['tqb_code'] ?: $row['name']) ?>」吗？" title="删除">
+                      data-confirm="确定要删除「<?= e($row['primary_value'] ?? '') ?>」吗？" title="删除">
                 <i class="bi bi-trash"></i>
               </button>
             </form>

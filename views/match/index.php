@@ -13,6 +13,17 @@ $listCols = array_filter($columns ?? [], fn($c) => $c['list'] ?? false);
   <?php endif; ?>
 </div>
 
+<?php if (empty($oemField)): ?>
+<div class="alert alert-warning small">
+  尚未设置 OEM 字段。请先导入含 OEM 列的产品 CSV，或在
+  <a href="?c=field&a=index" class="alert-link">字段管理</a> 中标记 OEM 字段。
+</div>
+<?php else: ?>
+<div class="alert alert-light border small">
+  当前 OEM 字段：<strong><?= e($oemField['label']) ?></strong>
+</div>
+<?php endif; ?>
+
 <div class="row g-3">
 
   <!-- ── Upload form ─────────────────────────────────────────────── -->

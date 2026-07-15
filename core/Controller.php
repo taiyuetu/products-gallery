@@ -1,14 +1,9 @@
 <?php
 /**
- * Controller �C base class for all controllers.
- * Provides view rendering, redirects and JSON responses.
+ * Controller – base class for all controllers.
  */
 abstract class Controller
 {
-    /**
-     * Render a view wrapped in layout/header + layout/footer.
-     * Variables in $data are extracted into the view scope.
-     */
     protected function render(string $view, array $data = []): void
     {
         extract($data, EXTR_SKIP);
@@ -35,16 +30,11 @@ abstract class Controller
         exit;
     }
 
-    /** Build a query-string URL from an array of params */
     protected function url(array $params): string
     {
         return '?' . http_build_query($params);
     }
 
-    /**
-     * Verify the CSRF token submitted with a POST request.
-     * Terminates with a 403 response if the token is missing or invalid.
-     */
     protected function verifyCsrf(): void
     {
         $sessionToken = $_SESSION['csrf_token'] ?? '';
@@ -55,10 +45,9 @@ abstract class Controller
         }
     }
 
-    /** Require the current session user to have the admin role. */
     protected function requireAdmin(): void
     {
-        if (($_SESSION['role'] ?? '') !== 'admin') {
+        if (!Auth::isAdmin()) {
             http_response_code(403);
             exit('权限不足：此操作需要管理员权限。');
         }
@@ -66,6 +55,17 @@ abstract class Controller
 
     protected function isAdmin(): bool
     {
-        return ($_SESSION['role'] ?? '') === 'admin';
+        return Auth::isAdmin();
+    }
+
+    protected function userId(): int
+    {
+        return Auth::requireUser();
+    }
+
+    /** Load this user's active field defs shaped for views/import/export. */
+    protected function userColumns(bool $activeOnly = true): array
+    {
+        return UserField::forUser($this->userId(), $activeOnly);
     }
 }

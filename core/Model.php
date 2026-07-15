@@ -1,24 +1,19 @@
 <?php
 /**
- * Model �C generic active-record base.
- * Subclasses set $table and $fillable; all queries use PDO prepared statements.
+ * Model – generic active-record base with optional user scoping.
  */
 abstract class Model
 {
     protected static string $table    = '';
     protected static array  $fillable = [];
-
-    /** Fillable keys omitted from the global text search (q) OR/LIKE clause */
-    protected static array $globalSearchSkip = [];
-
-    // ���� Connection ������������������������������������������������������������������������������������������������������������������������
+    protected static array  $globalSearchSkip = [];
+    /** When true, all()/count()/findForUser require user_id scoping */
+    protected static bool   $tenantScoped = false;
 
     protected static function db(): PDO
     {
         return Database::getInstance();
     }
-
-    // ���� Read ������������������������������������������������������������������������������������������������������������������������������������
 
     public static function find(int $id): ?array
     {
@@ -27,18 +22,24 @@ abstract class Model
         return $stmt->fetch() ?: null;
     }
 
-    /**
-     * Fetch rows with optional WHERE (LIKE), ORDER and LIMIT/OFFSET.
-     * $conditions: ['field' => 'value'] �C uses LIKE %value%
-     */
+    public static function findForUser(int $userId, int $id): ?array
+    {
+        $stmt = static::db()->prepare(
+            "SELECT * FROM `" . static::$table . "` WHERE id = ? AND user_id = ?"
+        );
+        $stmt->execute([$id, $userId]);
+        return $stmt->fetch() ?: null;
+    }
+
     public static function all(
         array $conditions = [],
         array $order      = ['id' => 'ASC'],
         int   $limit      = 0,
         int   $offset     = 0,
-        string $globalSearch = ''
+        string $globalSearch = '',
+        ?int  $userId = null
     ): array {
-        [$where, $params] = static::buildWhere($conditions, $globalSearch);
+        [$where, $params] = static::buildWhere($conditions, $globalSearch, $userId);
         $sql = "SELECT * FROM `" . static::$table . "`" . $where;
         $sql .= static::buildOrder($order);
         if ($limit > 0) {
@@ -49,17 +50,15 @@ abstract class Model
         return $stmt->fetchAll();
     }
 
-    public static function count(array $conditions = [], string $globalSearch = ''): int
+    public static function count(array $conditions = [], string $globalSearch = '', ?int $userId = null): int
     {
-        [$where, $params] = static::buildWhere($conditions, $globalSearch);
+        [$where, $params] = static::buildWhere($conditions, $globalSearch, $userId);
         $stmt = static::db()->prepare(
             "SELECT COUNT(*) FROM `" . static::$table . "`" . $where
         );
         $stmt->execute($params);
         return (int) $stmt->fetchColumn();
     }
-
-    // ���� Write ����������������������������������������������������������������������������������������������������������������������������������
 
     public static function create(array $data): int
     {
@@ -70,7 +69,8 @@ abstract class Model
         $stmt   = static::db()->prepare(
             "INSERT INTO `" . static::$table . "` ({$cols}) VALUES ({$ph})"
         );
-        $stmt->execute(array_values($data));
+        $values = array_map([static::class, 'normalizeValue'], array_values($data));
+        $stmt->execute($values);
         return (int) static::db()->lastInsertId();
     }
 
@@ -82,8 +82,23 @@ abstract class Model
         $stmt = static::db()->prepare(
             "UPDATE `" . static::$table . "` SET {$sets}, `updated_at` = NOW() WHERE id = ?"
         );
-        $values   = array_values($data);
+        $values   = array_map([static::class, 'normalizeValue'], array_values($data));
         $values[] = $id;
+        $stmt->execute($values);
+        return $stmt->rowCount() > 0;
+    }
+
+    public static function updateForUser(int $userId, int $id, array $data): bool
+    {
+        $data = static::filterFillable($data);
+        if (empty($data)) return false;
+        $sets = implode(', ', array_map(fn($f) => "`{$f}` = ?", array_keys($data)));
+        $stmt = static::db()->prepare(
+            "UPDATE `" . static::$table . "` SET {$sets}, `updated_at` = NOW() WHERE id = ? AND user_id = ?"
+        );
+        $values   = array_map([static::class, 'normalizeValue'], array_values($data));
+        $values[] = $id;
+        $values[] = $userId;
         $stmt->execute($values);
         return $stmt->rowCount() > 0;
     }
@@ -95,34 +110,54 @@ abstract class Model
         return $stmt->rowCount() > 0;
     }
 
-    public static function truncate(): bool
+    public static function deleteForUser(int $userId, int $id): bool
     {
-        $stmt = static::db()->prepare("TRUNCATE TABLE `" . static::$table . "`");
-        return $stmt->execute();
+        $stmt = static::db()->prepare(
+            "DELETE FROM `" . static::$table . "` WHERE id = ? AND user_id = ?"
+        );
+        $stmt->execute([$id, $userId]);
+        return $stmt->rowCount() > 0;
     }
 
-    // ���� Helpers ������������������������������������������������������������������������������������������������������������������������������
+    public static function truncateForUser(int $userId): bool
+    {
+        $stmt = static::db()->prepare("DELETE FROM `" . static::$table . "` WHERE user_id = ?");
+        return $stmt->execute([$userId]);
+    }
 
-    /** Keep only fillable keys; trim string values */
+    protected static function normalizeValue(mixed $v): mixed
+    {
+        if (is_array($v)) {
+            return json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+        return $v;
+    }
+
     protected static function filterFillable(array $data): array
     {
         $data = array_intersect_key($data, array_flip(static::$fillable));
         return array_map(fn($v) => is_string($v) ? trim($v) : $v, $data);
     }
 
-    /**
-     * Build a safe WHERE clause.
-     * Only fields in $fillable are allowed (whitelist).
-     */
-    protected static function buildWhere(array $conditions, string $globalSearch = ''): array
+    protected static function buildWhere(array $conditions, string $globalSearch = '', ?int $userId = null): array
     {
         $clauses = [];
         $params  = [];
+
+        if ($userId !== null) {
+            $clauses[] = '`user_id` = ?';
+            $params[]  = $userId;
+        } elseif (static::$tenantScoped) {
+            throw new RuntimeException(static::$table . ' queries require user_id scope');
+        }
+
         foreach ($conditions as $field => $value) {
-            if (!in_array($field, static::$fillable, true)) continue;
+            if (!in_array($field, static::$fillable, true) && $field !== 'id') {
+                continue;
+            }
             $value = trim((string) $value);
             if ($value === '') continue;
-            if ($field === 'category_id' || str_ends_with($field, '_id')) {
+            if ($field === 'category_id' || $field === 'user_id' || str_ends_with($field, '_id')) {
                 $clauses[] = "`{$field}` = ?";
                 $params[]  = $value;
             } else {
@@ -130,7 +165,7 @@ abstract class Model
                 $params[]  = '%' . $value . '%';
             }
         }
-        
+
         $globalSearch = trim($globalSearch);
         if ($globalSearch !== '') {
             $globalClauses = [];
@@ -138,7 +173,15 @@ abstract class Model
                 if (in_array($field, static::$globalSearchSkip, true)) {
                     continue;
                 }
+                if ($field === 'user_id' || $field === 'category_id' || $field === 'attrs' || $field === 'gallery') {
+                    continue;
+                }
                 $globalClauses[] = "`{$field}` LIKE ?";
+                $params[] = '%' . $globalSearch . '%';
+            }
+            // Also search JSON attrs blob
+            if (in_array('attrs', static::$fillable, true)) {
+                $globalClauses[] = 'CAST(`attrs` AS CHAR) LIKE ?';
                 $params[] = '%' . $globalSearch . '%';
             }
             if (!empty($globalClauses)) {
@@ -154,7 +197,7 @@ abstract class Model
     protected static function buildOrder(array $order): string
     {
         if (empty($order)) return '';
-        $allowed = array_merge(static::$fillable, ['id', 'created_at', 'updated_at']);
+        $allowed = array_merge(static::$fillable, ['id', 'created_at', 'updated_at', 'primary_value', 'oem_value']);
         $parts = [];
         foreach ($order as $col => $dir) {
             if (!in_array((string) $col, $allowed, true)) {

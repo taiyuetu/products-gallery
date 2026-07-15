@@ -1,27 +1,29 @@
 <?php
 require_once ROOT . '/core/Database.php';
 require_once ROOT . '/core/Controller.php';
+require_once ROOT . '/core/Auth.php';
 require_once ROOT . '/core/Model.php';
 require_once ROOT . '/core/ImageHelper.php';
 require_once ROOT . '/models/Product.php';
+require_once ROOT . '/models/UserField.php';
 
 class ImportController extends Controller
 {
-    private array $columns;
-
     public function __construct()
     {
-        $this->columns = require ROOT . '/config/columns.php';
+        UserField::ensureTable();
     }
-
-    // ── Upload form ───────────────────────────────────────────────
 
     public function index(): void
     {
-        $this->render('import/index', ['columns' => $this->columns]);
+        $userId  = $this->userId();
+        $columns = UserField::forUser($userId, true);
+        $needSchema = isset($_GET['msg']) && $_GET['msg'] === 'need_schema';
+        $this->render('import/index', [
+            'columns'    => $columns,
+            'needSchema' => $needSchema,
+        ]);
     }
-
-    // ── Process upload ────────────────────────────────────────────
 
     public function upload(): void
     {
@@ -29,6 +31,7 @@ class ImportController extends Controller
             $this->redirect($this->url(['c' => 'import', 'a' => 'index']));
         }
         $this->verifyCsrf();
+        $userId = $this->userId();
 
         $file = $_FILES['csv_file'] ?? null;
         if (!$file || $file['error'] !== UPLOAD_ERR_OK) {
@@ -49,17 +52,14 @@ class ImportController extends Controller
         $tmp = tempnam(sys_get_temp_dir(), 'pdb_');
         file_put_contents($tmp, $content);
 
-        // Pre-process bundled product images.
-        // The map is keyed by TQB code (case-insensitive) -> array of saved relative paths.
         [$imageMap, $imageErrors, $imageSavedCount, $imageReport]
-            = $this->processImages($_FILES['images'] ?? null);
+            = $this->processImages($userId, $_FILES['images'] ?? null);
 
-        [$imported, $skipped, $errors, $successRows, $imageMatched, $imageMissing]
-            = $this->importCsv($tmp, $imageMap);
+        [$imported, $skipped, $errors, $successRows, $imageMatched, $imageMissing, $columns]
+            = $this->importCsv($userId, $tmp, $imageMap);
 
         @unlink($tmp);
 
-        // Clean up images that did NOT match any TQB code in the CSV
         $imageUnmatched = [];
         foreach ($imageMap as $key => $paths) {
             if (!isset($imageMatched[$key])) {
@@ -78,7 +78,7 @@ class ImportController extends Controller
         unset($row);
 
         $this->render('import/index', [
-            'columns'         => $this->columns,
+            'columns'         => $columns,
             'imported'        => $imported,
             'skipped'         => $skipped,
             'errors'          => array_merge($errors, $imageErrors),
@@ -90,8 +90,6 @@ class ImportController extends Controller
             'imageReport'     => $imageReport,
         ]);
     }
-
-    // ── Private helpers ───────────────────────────────────────────
 
     private function toUtf8(string $content, string $encoding): string
     {
@@ -106,23 +104,14 @@ class ImportController extends Controller
         return $from ? mb_convert_encoding($content, 'UTF-8', $from) : $content;
     }
 
-    /**
-     * Save uploaded images (multi-file input "images[]") to the products
-     * upload directory. Returns:
-     *   [map, errors, savedCount, perFileReport]
-     * where `map` is keyed by the normalized TQB code derived from the
-     * filename basename → array of saved relative paths.
-     * Multiple images with the same TQB prefix (e.g. TQB0-001(1).jpg,
-     * TQB0-001(2).jpg) are ALL collected into the same gallery array.
-     */
-    private function processImages(?array $filesField): array
+    private function processImages(int $userId, ?array $filesField): array
     {
         if (!$filesField) return [[], [], 0, []];
 
         $files = ImageHelper::normalizeMulti($filesField);
         if (empty($files)) return [[], [], 0, []];
 
-        $map     = [];  // key => [path1, path2, ...]
+        $map     = [];
         $errors  = [];
         $saved   = 0;
         $report  = [];
@@ -131,7 +120,7 @@ class ImportController extends Controller
             $name = (string)($f['name'] ?? '');
             $base = basename(str_replace('\\', '/', $name));
             $stem = trim(pathinfo($base, PATHINFO_FILENAME));
-            $key  = self::normalizeTqbKey($stem);
+            $key  = self::normalizeMatchKey($stem);
 
             $entry = [
                 'name'   => $base,
@@ -142,7 +131,7 @@ class ImportController extends Controller
             ];
 
             if ($key === '') {
-                $entry['error'] = '无法从文件名解析 TQB 编码';
+                $entry['error'] = '无法从文件名解析主键';
                 $errors[] = '跳过图片 ' . $base . '：' . $entry['error'];
                 $report[] = $entry;
                 continue;
@@ -157,7 +146,7 @@ class ImportController extends Controller
             }
 
             try {
-                $rel = ImageHelper::save($f, $key, true);
+                $rel = ImageHelper::save($f, $key, $userId, true);
                 if (!isset($map[$key])) {
                     $map[$key] = [];
                 }
@@ -175,20 +164,7 @@ class ImportController extends Controller
         return [$map, $errors, $saved, $report];
     }
 
-    /**
-     * Normalize a string into the key used to match an image to a TQB code.
-     *
-     * Lower-cases, trims, and strips common OS-added markers so the resulting
-     * key is stable across e.g.:
-     *   "TQB3-0001.webp"                -> "tqb3-0001"
-     *   "TQB3-0001 (3).webp"            -> "tqb3-0001"
-     *   "TQB3-0001(3).webp"             -> "tqb3-0001"
-     *   "TQB3-0001 - Copy.webp"         -> "tqb3-0001"
-     *   "TQB3-0001 - Copy (2).webp"     -> "tqb3-0001"
-     *   "TQB3-0001 - 副本.webp"         -> "tqb3-0001"
-     *   "images/TQB3-0001.webp"         -> "tqb3-0001"  (caller strips dir)
-     */
-    public static function normalizeTqbKey(string $value): string
+    public static function normalizeMatchKey(string $value): string
     {
         $value = mb_strtolower(trim($value));
         if ($value === '') return '';
@@ -207,23 +183,23 @@ class ImportController extends Controller
         return $value;
     }
 
-    /**
-     * Import CSV rows. If $imageMap is non-empty, each row whose TQB code
-     * matches a key in the map gets its `gallery` set to the matched image
-     * paths (merged with any existing gallery). The set of matched keys is
-     * returned so unmatched images can be cleaned up.
-     */
-    private function importCsv(string $filePath, array $imageMap = []): array
+    private function importCsv(int $userId, string $filePath, array $imageMap = []): array
     {
         $handle = fopen($filePath, 'r');
-        if (!$handle) return [0, 0, ['无法读取文件'], [], [], []];
+        if (!$handle) return [0, 0, ['无法读取文件'], [], [], [], []];
 
         $headers = fgetcsv($handle);
         if (!$headers) {
             fclose($handle);
-            return [0, 0, ['CSV 文件似乎是空的'], [], [], []];
+            return [0, 0, ['CSV 文件似乎是空的'], [], [], [], []];
         }
         $headers = array_map('trim', $headers);
+
+        $columns = UserField::syncFromCsvHeaders($userId, $headers);
+        if (empty($columns)) {
+            fclose($handle);
+            return [0, 0, ['未能从 CSV 表头创建字段'], [], [], [], []];
+        }
 
         $imported = 0;
         $skipped  = 0;
@@ -243,79 +219,94 @@ class ImportController extends Controller
                     $row = array_pad($row, count($headers), '');
                 }
                 $csvRow = array_combine($headers, array_slice($row, 0, count($headers)));
-                $data   = Product::fromCsvRow($csvRow, $this->columns);
-
-                if (empty(array_filter($data, fn($v) => $v !== ''))) {
+                if ($csvRow === false) {
                     $skipped++;
                     continue;
                 }
 
-                $tqbCode = $data['tqb_code'] ?? '';
-                $newOem  = $data['oem_number'] ?? '';
+                [$attrs, $primary, $oem] = UserField::rowToAttrs($csvRow, $columns);
 
-                $imgKey    = self::normalizeTqbKey($tqbCode);
+                if (empty(array_filter($attrs, fn($v) => $v !== ''))) {
+                    $skipped++;
+                    continue;
+                }
+
+                $imgKey     = self::normalizeMatchKey($primary);
                 $matchPaths = ($imgKey !== '' && isset($imageMap[$imgKey])) ? $imageMap[$imgKey] : null;
 
-                if ($tqbCode !== '') {
-                    $existing = Product::findByTqbCode($tqbCode);
+                if ($primary !== '') {
+                    $existing = Product::findByPrimary($userId, $primary);
                     if ($existing) {
-                        $existingOem = $existing['oem_number'] ?? '';
-
-                        $oemParts    = array_filter(array_map('trim', explode('/', $existingOem)), fn($v) => $v !== '');
-                        $newOemParts = array_filter(array_map('trim', explode('/', $newOem)),     fn($v) => $v !== '');
-
+                        $existingOem = $existing['oem_value'] ?? '';
+                        $oemParts    = array_filter(array_map('trim', explode('/', (string)$existingOem)), fn($v) => $v !== '');
+                        $newOemParts = array_filter(array_map('trim', explode('/', $oem)), fn($v) => $v !== '');
                         $isSubset = empty(array_diff($newOemParts, $oemParts));
 
                         if ($isSubset && $matchPaths === null) {
                             $skipped++;
                             if (!empty($imageMap) && $imgKey !== '' && !isset($imageMap[$imgKey])) {
-                                $imageMissing[$tqbCode] = true;
+                                $imageMissing[$primary] = true;
                             }
                             continue;
                         }
 
                         if (!$isSubset) {
                             $mergedOem = array_unique(array_merge($oemParts, $newOemParts));
-                            $data['oem_number'] = implode('/', $mergedOem);
+                            $oem = implode('/', $mergedOem);
+                            // also update attrs oem key
+                            $oemCol = UserField::oemField($userId);
+                            if ($oemCol) {
+                                $attrs[$oemCol['field']] = $oem;
+                            }
                         } else {
-                            $data['oem_number'] = $existingOem;
+                            $oem = $existingOem;
                         }
 
+                        $gallery = Product::parseGallery($existing['gallery'] ?? null);
                         if ($matchPaths !== null) {
-                            // Merge new images into the existing gallery
-                            $existingGallery = Product::parseGallery($existing['gallery'] ?? null);
-                            $mergedGallery = array_merge($existingGallery, $matchPaths);
-                            $data['gallery'] = Product::galleryJson($mergedGallery);
+                            $gallery = array_merge($gallery, $matchPaths);
                             $imageMatched[$imgKey] = true;
                         }
 
-                        $updated = Product::update($existing['id'], $data);
+                        // merge attrs
+                        $mergedAttrs = array_merge(Product::parseAttrs($existing['attrs'] ?? null), $attrs);
+
+                        $updated = Product::updateAttrs($userId, (int)$existing['id'], [
+                            'primary_value' => $primary,
+                            'oem_value'     => $oem,
+                            'attrs'         => $mergedAttrs,
+                            'gallery'       => Product::galleryJson($gallery),
+                        ]);
                         if ($updated) {
-                            $successRows[] = $data + ['id' => $existing['id']];
+                            $successRows[] = $mergedAttrs + ['id' => $existing['id'], 'primary_value' => $primary];
                             $imported++;
                         } else {
                             $skipped++;
                         }
 
                         if (!empty($imageMap) && $imgKey !== '' && $matchPaths === null) {
-                            $imageMissing[$tqbCode] = true;
+                            $imageMissing[$primary] = true;
                         }
                         continue;
                     }
                 }
 
-                // New product
+                $gallery = null;
                 if ($matchPaths !== null) {
-                    $data['gallery'] = Product::galleryJson($matchPaths);
+                    $gallery = Product::galleryJson($matchPaths);
                     $imageMatched[$imgKey] = true;
-                } elseif (!empty($imageMap) && $tqbCode !== '') {
-                    $imageMissing[$tqbCode] = true;
+                } elseif (!empty($imageMap) && $primary !== '') {
+                    $imageMissing[$primary] = true;
                 }
 
-                $newId = Product::create($data);
+                $newId = Product::createForUser($userId, [
+                    'primary_value' => $primary,
+                    'oem_value'     => $oem,
+                    'attrs'         => $attrs,
+                    'gallery'       => $gallery,
+                ]);
                 if ($newId) {
-                    $data['id'] = $newId;
-                    $successRows[] = $data;
+                    $successRows[] = $attrs + ['id' => $newId, 'primary_value' => $primary];
                     $imported++;
                 }
             }
@@ -333,13 +324,14 @@ class ImportController extends Controller
             array_slice($successRows, -20),
             $imageMatched,
             array_keys($imageMissing),
+            $columns,
         ];
     }
 
     private function renderWithError(string $message): void
     {
         $this->render('import/index', [
-            'columns' => $this->columns,
+            'columns' => UserField::forUser($this->userId(), true),
             'error'   => $message,
         ]);
     }

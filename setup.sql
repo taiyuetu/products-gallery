@@ -1,6 +1,6 @@
 -- ============================================================
--- Product Database Setup
--- Run this script in your MySQL client before first use.
+-- Product Gallery SaaS Setup (v2.0)
+-- Per-user catalogs; product columns defined by each user's CSV.
 -- DB name and port must match config/database.php.
 -- ============================================================
 
@@ -10,73 +10,8 @@ CREATE DATABASE IF NOT EXISTS `productsgallery`
 
 USE `productsgallery`;
 
-CREATE TABLE IF NOT EXISTS `products` (
-  `id`                INT UNSIGNED     AUTO_INCREMENT PRIMARY KEY,
-  `category_id`       INT UNSIGNED     DEFAULT NULL COMMENT 'FK to categories.id',
-  `name`              VARCHAR(255)     DEFAULT NULL COMMENT '商品名称',
-  `tqb_code`          VARCHAR(100)     DEFAULT NULL COMMENT 'TQB编码',
-  `oem_number`        TEXT             DEFAULT NULL COMMENT 'OEM号码',
-  `car_series`        VARCHAR(100)     DEFAULT NULL COMMENT '车系',
-  `car_model`         TEXT             DEFAULT NULL COMMENT '车型',
-  `universal_model`   TEXT             DEFAULT NULL COMMENT '通用型号',
-  `production_code`   VARCHAR(100)     DEFAULT NULL COMMENT '生产编码',
-  `no_stock_purchase` VARCHAR(50)      DEFAULT NULL COMMENT '无库存可购',
-  `trade_car_series`  VARCHAR(100)     DEFAULT NULL COMMENT '外贸车系',
-  `trade_car_model`   TEXT             DEFAULT NULL COMMENT '外贸车型',
-  `trade_universal`   TEXT             DEFAULT NULL COMMENT '外贸通用型号',
-  `bca`               VARCHAR(100)     DEFAULT NULL COMMENT 'BCA品牌',
-  `skf`               VARCHAR(100)     DEFAULT NULL COMMENT 'SKF品牌',
-  `snr`               VARCHAR(100)     DEFAULT NULL COMMENT 'SNR品牌',
-  `timken`            VARCHAR(100)     DEFAULT NULL COMMENT 'TIMKEN品牌',
-  `nsk`               VARCHAR(100)     DEFAULT NULL COMMENT 'NSK品牌',
-  `ntn`               VARCHAR(100)     DEFAULT NULL COMMENT 'NTN品牌',
-  `koyo`              VARCHAR(100)     DEFAULT NULL COMMENT 'KOYO品牌',
-  `cost`              VARCHAR(50)      DEFAULT NULL COMMENT '成本',
-  `spline_teeth`      VARCHAR(100)     DEFAULT NULL COMMENT '花键齿/齿数/外圈齿数',
-  `dimensions`        VARCHAR(100)     DEFAULT NULL COMMENT '尺寸',
-  `weight`            VARCHAR(50)      DEFAULT NULL COMMENT '重量',
-  `inner_box_size`    VARCHAR(100)     DEFAULT NULL COMMENT '内盒尺寸',
-  `original_category` VARCHAR(100)     DEFAULT NULL COMMENT '原始分类',
-  `stock_status`      VARCHAR(50)      DEFAULT NULL COMMENT '库存状态',
-  `in_system`         VARCHAR(20)      DEFAULT NULL COMMENT '是否录入系统',
-  `system_code`       VARCHAR(100)     DEFAULT NULL COMMENT '系统产品编码',
-  `stock_qty`         VARCHAR(20)      DEFAULT NULL COMMENT '库存数量',
-  `stock_max`         VARCHAR(20)      DEFAULT NULL COMMENT '最大库存',
-  `stock_min`         VARCHAR(20)      DEFAULT NULL COMMENT '最小库存',
-  `supplier1`         VARCHAR(100)     DEFAULT NULL COMMENT '首选供应商',
-  `supplier1_price`   VARCHAR(50)      DEFAULT NULL COMMENT '首选采购价',
-  `supplier2`         VARCHAR(100)     DEFAULT NULL COMMENT '备用供应商1',
-  `supplier2_price`   VARCHAR(50)      DEFAULT NULL COMMENT '备用采购价1',
-  `supplier3`         VARCHAR(100)     DEFAULT NULL COMMENT '备用供应商2',
-  `supplier3_price`   VARCHAR(50)      DEFAULT NULL COMMENT '备用采购价2',
-  `supplier4`         VARCHAR(100)     DEFAULT NULL COMMENT '备用供应商3',
-  `supplier4_price`   VARCHAR(50)      DEFAULT NULL COMMENT '备用采购价3',
-  `warehouse_a`       VARCHAR(50)      DEFAULT NULL COMMENT 'A仓可出数量',
-  `gallery`           TEXT             DEFAULT NULL COMMENT '产品图片相对路径 (JSON 数组)',
-  `created_at`        TIMESTAMP        DEFAULT CURRENT_TIMESTAMP,
-  `updated_at`        TIMESTAMP        DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-
-  INDEX `idx_category_id` (`category_id`),
-  INDEX `idx_tqb_code`    (`tqb_code`),
-  INDEX `idx_name`        (`name`),
-  INDEX `idx_car_series`  (`car_series`),
-  INDEX `idx_stock_status`(`stock_status`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
 -- --------------------------------------------------------
--- Table structure for table `categories`
--- --------------------------------------------------------
-CREATE TABLE IF NOT EXISTS `categories` (
-    `id`          INT(11)      NOT NULL AUTO_INCREMENT,
-    `name`        VARCHAR(255) NOT NULL,
-    `description` TEXT,
-    `created_at`  TIMESTAMP    NULL DEFAULT CURRENT_TIMESTAMP,
-    `updated_at`  TIMESTAMP    NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- --------------------------------------------------------
--- Table structure for table `users`
+-- users
 -- --------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `users` (
   `id`            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
@@ -89,5 +24,60 @@ CREATE TABLE IF NOT EXISTS `users` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_username` (`username`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
--- NOTE: On first visit the app will detect an empty users table and redirect
--- you to a one-time setup page to create the administrator account.
+
+-- --------------------------------------------------------
+-- user_fields – per-user dynamic column definitions
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `user_fields` (
+  `id`           INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  `user_id`      INT UNSIGNED  NOT NULL,
+  `field_key`    VARCHAR(64)   NOT NULL COMMENT 'slug used in attrs JSON',
+  `label`        VARCHAR(255)  NOT NULL COMMENT 'CSV header / UI label',
+  `type`         VARCHAR(20)   NOT NULL DEFAULT 'text',
+  `filterable`   TINYINT(1)    NOT NULL DEFAULT 0,
+  `list`         TINYINT(1)    NOT NULL DEFAULT 0,
+  `active`       TINYINT(1)    NOT NULL DEFAULT 1,
+  `is_primary`   TINYINT(1)    NOT NULL DEFAULT 0 COMMENT 'upsert / image match key',
+  `is_oem`       TINYINT(1)    NOT NULL DEFAULT 0 COMMENT 'OEM match field',
+  `tab`          VARCHAR(100)  NOT NULL DEFAULT '字段',
+  `sort_order`   INT           NOT NULL DEFAULT 0,
+  `created_at`   TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`   TIMESTAMP     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_user_field_key` (`user_id`, `field_key`),
+  KEY `idx_user_fields_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+-- categories (per user)
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `categories` (
+  `id`          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id`     INT UNSIGNED NOT NULL,
+  `name`        VARCHAR(255) NOT NULL,
+  `description` TEXT,
+  `created_at`  TIMESTAMP    NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`  TIMESTAMP    NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_categories_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+-- products (slim + JSON attrs)
+-- --------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `products` (
+  `id`            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  `user_id`       INT UNSIGNED  NOT NULL,
+  `category_id`   INT UNSIGNED  DEFAULT NULL,
+  `primary_value` VARCHAR(255)  DEFAULT NULL COMMENT 'denormalized primary field',
+  `oem_value`     TEXT          DEFAULT NULL COMMENT 'denormalized OEM field',
+  `gallery`       TEXT          DEFAULT NULL COMMENT 'JSON array of relative image paths',
+  `attrs`         JSON          DEFAULT NULL COMMENT 'all CSV field values by field_key',
+  `created_at`    TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`    TIMESTAMP     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_products_user` (`user_id`),
+  KEY `idx_products_category` (`category_id`),
+  KEY `idx_products_primary` (`user_id`, `primary_value`(191)),
+  KEY `idx_products_updated` (`user_id`, `updated_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

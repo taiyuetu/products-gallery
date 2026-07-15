@@ -1,9 +1,13 @@
 <?php
 // Helpers available in every view
-function e(mixed $v): string { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
-function asset(string $path): string {
-    $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'])), '/');
-    return $base . '/public/' . ltrim($path, '/');
+if (!function_exists('e')) {
+    function e(mixed $v): string { return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
+}
+if (!function_exists('asset')) {
+    function asset(string $path): string {
+        $base = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'])), '/');
+        return $base . '/public/' . ltrim($path, '/');
+    }
 }
 
 $_c = $_GET['c'] ?? 'product';
@@ -15,7 +19,7 @@ $_a = $_GET['a'] ?? 'index';
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="csrf-token" content="<?= htmlspecialchars($_SESSION['csrf_token'] ?? '', ENT_QUOTES, 'UTF-8') ?>">
-<title>产品数据库</title>
+<title>产品图库 SaaS</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <link rel="stylesheet" href="<?= asset('css/app.css') ?>">
@@ -25,7 +29,7 @@ $_a = $_GET['a'] ?? 'index';
 <nav class="navbar navbar-expand-lg navbar-dark bg-primary sticky-top shadow-sm">
   <div class="container-fluid px-3">
     <a class="navbar-brand fw-bold" href="?c=product&a=index">
-      <i class="bi bi-database-fill me-1"></i>产品数据库
+      <i class="bi bi-database-fill me-1"></i>产品图库
     </a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMain">
       <span class="navbar-toggler-icon"></span>
@@ -48,6 +52,11 @@ $_a = $_GET['a'] ?? 'index';
           </a>
         </li>
         <li class="nav-item">
+          <a class="nav-link <?= ($_c==='field') ? 'active' : '' ?>" href="?c=field&a=index">
+            <i class="bi bi-sliders me-1"></i>字段管理
+          </a>
+        </li>
+        <li class="nav-item">
           <a class="nav-link <?= ($_c==='match') ? 'active' : '' ?>" href="?c=match&a=index">
             <i class="bi bi-search me-1"></i>OEM 匹配
           </a>
@@ -59,7 +68,6 @@ $_a = $_GET['a'] ?? 'index';
         </li>
       </ul>
 
-      <!-- Logged-in user + logout -->
       <ul class="navbar-nav ms-auto align-items-center gap-1">
         <li class="nav-item">
           <span class="navbar-text text-white-50 small me-1">
@@ -84,12 +92,13 @@ $_a = $_GET['a'] ?? 'index';
 <div class="container-fluid px-3 py-3">
 
 <?php
-// Flash messages
 $msgs = [
     'created'     => ['success', '<i class="bi bi-check-circle me-1"></i>创建成功'],
     'updated'     => ['success', '<i class="bi bi-check-circle me-1"></i>更新成功'],
     'deleted'     => ['warning', '<i class="bi bi-trash me-1"></i>已删除'],
-    'deleted_all' => ['warning', '<i class="bi bi-trash me-1"></i>所有产品数据已清空'],
+    'deleted_all' => ['warning', '<i class="bi bi-trash me-1"></i>您的产品数据已清空'],
+    'primary'     => ['success', '<i class="bi bi-check-circle me-1"></i>已设置主键字段'],
+    'oem'         => ['success', '<i class="bi bi-check-circle me-1"></i>已设置 OEM 字段'],
 ];
 if (isset($_GET['msg'], $msgs[$_GET['msg']])):
     [$type, $text] = $msgs[$_GET['msg']];

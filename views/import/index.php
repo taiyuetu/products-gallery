@@ -5,6 +5,25 @@
   </h5>
 </div>
 
+<?php if (!empty($needSchema)): ?>
+<div class="alert alert-warning">
+  <i class="bi bi-exclamation-triangle me-1"></i>
+  请先导入一份带表头的 CSV，系统会根据表头为您创建专属字段后再新增产品。
+</div>
+<?php endif; ?>
+
+<?php if (!empty($columns)): ?>
+<div class="alert alert-light border small mb-3">
+  当前字段（<?= count($columns) ?>）：
+  <?php foreach ($columns as $i => $col): ?>
+    <span class="badge bg-<?= !empty($col['is_primary']) ? 'primary' : (!empty($col['is_oem']) ? 'success' : 'secondary') ?> me-1">
+      <?= e($col['label']) ?><?= !empty($col['is_primary']) ? ' ·主键' : '' ?><?= !empty($col['is_oem']) ? ' ·OEM' : '' ?>
+    </span>
+  <?php endforeach; ?>
+  <a href="?c=field&a=index" class="ms-2">管理字段</a>
+</div>
+<?php endif; ?>
+
 <div class="row g-3">
 
   <!-- Upload form -->
@@ -29,7 +48,7 @@
           <?php if (!empty($imageUnmatched)): ?>
             <div class="text-danger mt-1">
               <i class="bi bi-exclamation-triangle me-1"></i>
-              <strong><?= count($imageUnmatched) ?></strong> 个 TQB 编码的图片已上传但未在 CSV 中找到对应产品（已自动清理）：
+              <strong><?= count($imageUnmatched) ?></strong> 个主键的图片已上传但未在 CSV 中找到对应产品（已自动清理）：
               <code><?= e(implode(', ', array_slice($imageUnmatched, 0, 30))) ?><?= count($imageUnmatched) > 30 ? ' …' : '' ?></code>
             </div>
           <?php endif; ?>
@@ -39,7 +58,7 @@
               <div class="mt-1 small" style="max-height:200px;overflow:auto;">
                 <table class="table table-sm mb-0">
                   <thead class="table-light">
-                    <tr><th style="width:42%">文件名</th><th>解析得到的 TQB 编码</th><th>结果</th></tr>
+                    <tr><th style="width:42%">文件名</th><th>解析得到的主键</th><th>结果</th></tr>
                   </thead>
                   <tbody>
                     <?php foreach ($imageReport as $r): ?>

@@ -1,32 +1,24 @@
 <?php
 require_once ROOT . '/core/Database.php';
 require_once ROOT . '/core/Controller.php';
+require_once ROOT . '/core/Auth.php';
 require_once ROOT . '/core/Model.php';
 require_once ROOT . '/core/ImageHelper.php';
 require_once ROOT . '/models/Product.php';
 require_once ROOT . '/models/Category.php';
+require_once ROOT . '/models/UserField.php';
 
 class ProductController extends Controller
 {
-    private array $columns;
-
-    public function __construct()
-    {
-        $this->columns = require ROOT . '/config/columns.php';
-    }
-
-    // ── List ──────────────────────────────────────────────────────
-
     public function index(): void
     {
+        $userId  = $this->userId();
+        $columns = $this->userColumns();
         $filters = $_GET['f'] ?? [];
         $q       = trim($_GET['q'] ?? '');
         $page    = max(1, (int) ($_GET['page'] ?? 1));
-        
-        $allowedSort = array_merge(
-            ['id', 'created_at', 'updated_at'],
-            array_column($this->columns, 'field')
-        );
+
+        $allowedSort = ['id', 'created_at', 'updated_at', 'primary_value'];
         $sort = (string) ($_GET['sort'] ?? 'updated_at');
         if (!in_array($sort, $allowedSort, true)) {
             $sort = 'updated_at';
@@ -37,11 +29,11 @@ class ProductController extends Controller
             $order['id'] = 'DESC';
         }
 
-        $result  = Product::search($filters, $page, 50, $q, $order);
+        $result = Product::search($userId, $filters, $page, 50, $q, $order, $columns);
 
         $this->render('products/index', [
-            'columns'    => $this->columns,
-            'categories' => Category::all([], ['name' => 'ASC']),
+            'columns'    => $columns,
+            'categories' => Category::allForUser($userId),
             'filters'    => $filters,
             'q'          => $q,
             'rows'       => $result['rows'],
@@ -54,25 +46,26 @@ class ProductController extends Controller
         ]);
     }
 
-    // ── Detail ────────────────────────────────────────────────────
-
     public function show(): void
     {
         $product = $this->findOrRedirect();
         $this->render('products/show', [
             'product' => $product,
-            'columns' => $this->columns,
+            'columns' => $this->userColumns(),
         ]);
     }
 
-    // ── Create ────────────────────────────────────────────────────
-
     public function create(): void
     {
+        $userId  = $this->userId();
+        $columns = $this->userColumns();
+        if (empty($columns)) {
+            $this->redirect($this->url(['c' => 'import', 'a' => 'index', 'msg' => 'need_schema']));
+        }
         $this->render('products/form', [
             'product'    => [],
-            'columns'    => $this->columns,
-            'categories' => Category::all([], ['name' => 'ASC']),
+            'columns'    => $columns,
+            'categories' => Category::allForUser($userId),
             'isEdit'     => false,
             'title'      => '新增',
         ]);
@@ -81,39 +74,46 @@ class ProductController extends Controller
     public function store(): void
     {
         $this->requirePost();
-        $data = $_POST['product'] ?? [];
-        $data['category_id'] = $this->resolveCategory($data, $_POST['new_category_name'] ?? '');
-        unset($data['gallery']);
+        $userId  = $this->userId();
+        $columns = $this->userColumns();
+        $posted  = $_POST['product'] ?? [];
+        [$attrs, $primary, $oem] = Product::attrsFromForm($posted, $columns);
+        $categoryId = $this->resolveCategory($posted, $_POST['new_category_name'] ?? '', $userId);
 
-        $newId = Product::create($data);
+        $newId = Product::createForUser($userId, [
+            'category_id'   => $categoryId,
+            'primary_value' => $primary,
+            'oem_value'     => $oem,
+            'attrs'         => $attrs,
+            'gallery'       => null,
+        ]);
 
         if ($newId && !empty($_FILES['images'])) {
             $files = ImageHelper::normalizeMulti($_FILES['images']);
             $saved = [];
-            $prefix = ($data['tqb_code'] ?? '') !== '' ? $data['tqb_code'] : ('product_' . $newId);
+            $prefix = $primary !== '' ? $primary : ('product_' . $newId);
             foreach ($files as $f) {
                 if (ImageHelper::validate($f) !== null) continue;
                 try {
-                    $saved[] = ImageHelper::save($f, $prefix, true);
+                    $saved[] = ImageHelper::save($f, $prefix, $userId, true);
                 } catch (Throwable $e) { /* skip */ }
             }
             if (!empty($saved)) {
-                Product::update($newId, ['gallery' => Product::galleryJson($saved)]);
+                Product::updateAttrs($userId, $newId, ['gallery' => Product::galleryJson($saved)]);
             }
         }
 
         $this->redirect($this->url(['c' => 'product', 'a' => 'index', 'msg' => 'created']));
     }
 
-    // ── Edit ──────────────────────────────────────────────────────
-
     public function edit(): void
     {
         $product = $this->findOrRedirect();
+        $userId  = $this->userId();
         $this->render('products/form', [
             'product'    => $product,
-            'columns'    => $this->columns,
-            'categories' => Category::all([], ['name' => 'ASC']),
+            'columns'    => $this->userColumns(),
+            'categories' => Category::allForUser($userId),
             'isEdit'     => true,
             'title'      => '编辑',
         ]);
@@ -122,15 +122,20 @@ class ProductController extends Controller
     public function update(): void
     {
         $this->requirePost();
-        $id   = (int) ($_POST['id'] ?? 0);
-        $data = $_POST['product'] ?? [];
-        $data['category_id'] = $this->resolveCategory($data, $_POST['new_category_name'] ?? '');
-        unset($data['gallery']);
+        $userId = $this->userId();
+        $id     = (int) ($_POST['id'] ?? 0);
+        $existing = Product::findForUser($userId, $id);
+        if (!$existing) {
+            $this->redirect($this->url(['c' => 'product', 'a' => 'index']));
+        }
 
-        $existing = Product::find($id);
-        $gallery  = $existing ? Product::parseGallery($existing['gallery'] ?? null) : [];
+        $columns = $this->userColumns();
+        $posted  = $_POST['product'] ?? [];
+        [$attrs, $primary, $oem] = Product::attrsFromForm($posted, $columns);
+        $categoryId = $this->resolveCategory($posted, $_POST['new_category_name'] ?? '', $userId);
 
-        // Remove selected images
+        $gallery = Product::parseGallery($existing['gallery'] ?? null);
+
         $removeList = $_POST['remove_gallery'] ?? [];
         if (!empty($removeList) && is_array($removeList)) {
             foreach ($removeList as $relPath) {
@@ -138,8 +143,6 @@ class ProductController extends Controller
                 $gallery = array_values(array_filter($gallery, fn($p) => $p !== $relPath));
             }
         }
-
-        // Remove ALL images
         if (!empty($_POST['remove_all_images'])) {
             foreach ($gallery as $p) {
                 ImageHelper::delete($p);
@@ -147,127 +150,117 @@ class ProductController extends Controller
             $gallery = [];
         }
 
-        // Append new uploads
         if (!empty($_FILES['images'])) {
             $files  = ImageHelper::normalizeMulti($_FILES['images']);
-            $prefix = ($data['tqb_code'] ?? '') !== '' ? $data['tqb_code'] : ('product_' . $id);
+            $prefix = $primary !== '' ? $primary : ('product_' . $id);
             foreach ($files as $f) {
                 if (ImageHelper::validate($f) !== null) continue;
                 try {
-                    $gallery[] = ImageHelper::save($f, $prefix, true);
+                    $gallery[] = ImageHelper::save($f, $prefix, $userId, true);
                 } catch (Throwable $e) { /* skip */ }
             }
         }
 
-        $data['gallery'] = Product::galleryJson($gallery);
-        Product::update($id, $data);
+        Product::updateAttrs($userId, $id, [
+            'category_id'   => $categoryId,
+            'primary_value' => $primary,
+            'oem_value'     => $oem,
+            'attrs'         => $attrs,
+            'gallery'       => Product::galleryJson($gallery),
+        ]);
+
         $this->redirect($this->url(['c' => 'product', 'a' => 'show', 'id' => $id, 'msg' => 'updated']));
     }
-
-    // ── Delete ────────────────────────────────────────────────────
 
     public function delete(): void
     {
         $this->requirePost();
+        $userId = $this->userId();
         $id = (int) ($_POST['id'] ?? 0);
-        $existing = Product::find($id);
+        $existing = Product::findForUser($userId, $id);
         if ($existing) {
             foreach (Product::parseGallery($existing['gallery'] ?? null) as $p) {
                 ImageHelper::delete($p);
             }
+            Product::deleteForUser($userId, $id);
         }
-        Product::delete($id);
         $this->redirect($this->url(['c' => 'product', 'a' => 'index', 'msg' => 'deleted']));
     }
 
     public function deleteAll(): void
     {
         $this->requirePost();
-        $this->requireAdmin();
-        $rows = Product::all([], ['id' => 'ASC'], 0, 0, '');
+        $userId = $this->userId();
+        $rows = Product::all([], ['id' => 'ASC'], 0, 0, '', $userId);
         foreach ($rows as $row) {
             foreach (Product::parseGallery($row['gallery'] ?? null) as $p) {
                 ImageHelper::delete($p);
             }
         }
-        Product::truncate();
+        Product::truncateForUser($userId);
         $this->redirect($this->url(['c' => 'product', 'a' => 'index', 'msg' => 'deleted_all']));
     }
 
     public function deleteImage(): void
     {
         $this->requirePost();
+        $userId = $this->userId();
         $id = (int) ($_POST['id'] ?? 0);
-        $existing = Product::find($id);
+        $existing = Product::findForUser($userId, $id);
         if ($existing) {
             foreach (Product::parseGallery($existing['gallery'] ?? null) as $p) {
                 ImageHelper::delete($p);
             }
-            Product::update($id, ['gallery' => null]);
+            Product::updateAttrs($userId, $id, ['gallery' => null]);
         }
         $this->redirect($this->url(['c' => 'product', 'a' => 'edit', 'id' => $id, 'msg' => 'updated']));
     }
 
-    /**
-     * AJAX: remove a single image from gallery (POST, returns JSON).
-     */
     public function removeGalleryImage(): void
     {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             $this->json(['ok' => false, 'error' => 'Invalid method'], 405);
         }
-        $sessionToken = $_SESSION['csrf_token'] ?? '';
-        $requestToken = $_POST['_token'] ?? '';
-        if ($sessionToken === '' || !hash_equals($sessionToken, $requestToken)) {
-            $this->json(['ok' => false, 'error' => '请求令牌无效，请刷新页面后重试。'], 403);
-        }
+        $this->verifyCsrfJson();
+        $userId = Auth::userId();
         $id   = (int) ($_POST['id'] ?? 0);
         $path = $_POST['path'] ?? '';
-        $product = Product::find($id);
+        $product = Product::findForUser($userId, $id);
         if (!$product) {
             $this->json(['ok' => false, 'error' => '产品不存在'], 404);
         }
         $gallery = Product::parseGallery($product['gallery'] ?? null);
         ImageHelper::delete($path);
         $gallery = array_values(array_filter($gallery, fn($p) => $p !== $path));
-        Product::update($id, ['gallery' => Product::galleryJson($gallery)]);
+        Product::updateAttrs($userId, $id, ['gallery' => Product::galleryJson($gallery)]);
         $this->json(['ok' => true, 'gallery' => $gallery]);
     }
 
-    /**
-     * AJAX: upload images to gallery (POST, returns JSON).
-     * Appends to existing gallery rather than replacing.
-     */
     public function uploadImage(): void
     {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             $this->json(['ok' => false, 'error' => 'Invalid method'], 405);
         }
-        $sessionToken = $_SESSION['csrf_token'] ?? '';
-        $requestToken = $_POST['_token'] ?? '';
-        if ($sessionToken === '' || !hash_equals($sessionToken, $requestToken)) {
-            $this->json(['ok' => false, 'error' => '请求令牌无效，请刷新页面后重试。'], 403);
-        }
+        $this->verifyCsrfJson();
+        $userId = Auth::userId();
         $id = (int) ($_POST['id'] ?? 0);
-        $product = Product::find($id);
+        $product = Product::findForUser($userId, $id);
         if (!$product) {
             $this->json(['ok' => false, 'error' => '产品不存在'], 404);
         }
 
-        // Support both single file (name="image") and multi (name="images[]")
         $files = [];
         if (!empty($_FILES['images'])) {
             $files = ImageHelper::normalizeMulti($_FILES['images']);
         } elseif (!empty($_FILES['image']['name'])) {
             $files = [$_FILES['image']];
         }
-
         if (empty($files)) {
             $this->json(['ok' => false, 'error' => '未选择文件']);
         }
 
         $gallery = Product::parseGallery($product['gallery'] ?? null);
-        $prefix  = ($product['tqb_code'] ?? '') !== '' ? $product['tqb_code'] : ('product_' . $id);
+        $prefix  = ($product['primary_value'] ?? '') !== '' ? $product['primary_value'] : ('product_' . $id);
         $newUrls = [];
         $base    = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'])), '/');
 
@@ -275,7 +268,7 @@ class ProductController extends Controller
             $err = ImageHelper::validate($f);
             if ($err !== null) continue;
             try {
-                $rel = ImageHelper::save($f, $prefix, true);
+                $rel = ImageHelper::save($f, $prefix, $userId, true);
                 $gallery[] = $rel;
                 $newUrls[] = $base . '/' . ltrim($rel, '/');
             } catch (Throwable $e) { /* skip */ }
@@ -285,7 +278,7 @@ class ProductController extends Controller
             $this->json(['ok' => false, 'error' => '没有有效的图片文件']);
         }
 
-        Product::update($id, ['gallery' => Product::galleryJson($gallery)]);
+        Product::updateAttrs($userId, $id, ['gallery' => Product::galleryJson($gallery)]);
 
         $this->json([
             'ok'      => true,
@@ -295,14 +288,14 @@ class ProductController extends Controller
         ]);
     }
 
-    // ── Export CSV ────────────────────────────────────────────────
-
     public function export(): void
     {
+        $userId  = $this->userId();
+        $columns = $this->userColumns();
         $filters = $_GET['f'] ?? [];
         $q       = trim($_GET['q'] ?? '');
-        $clean   = array_filter($filters, fn($v) => trim((string) $v) !== '');
-        $rows    = Product::all($clean, ['id' => 'ASC'], 0, 0, $q);
+        $result  = Product::search($userId, $filters, 1, 0, $q, ['id' => 'ASC'], $columns);
+        $rows    = $result['rows'];
 
         $filename = 'products_' . date('Ymd_His') . '.csv';
         header('Content-Type: text/csv; charset=utf-8');
@@ -311,11 +304,11 @@ class ProductController extends Controller
 
         $out = fopen('php://output', 'w');
         fwrite($out, "\xEF\xBB\xBF");
-        fputcsv($out, array_column($this->columns, 'label'));
+        fputcsv($out, array_column($columns, 'label'));
 
         foreach ($rows as $row) {
             $line = [];
-            foreach ($this->columns as $col) {
+            foreach ($columns as $col) {
                 $line[] = $row[$col['field']] ?? '';
             }
             fputcsv($out, $line);
@@ -324,25 +317,31 @@ class ProductController extends Controller
         exit;
     }
 
-    // ── Private helpers ───────────────────────────────────────────
-
     private function findOrRedirect(): array
     {
+        $userId  = $this->userId();
         $id      = (int) ($_GET['id'] ?? 0);
-        $product = Product::find($id);
+        $product = Product::findForUser($userId, $id);
         if (!$product) {
             $this->redirect($this->url(['c' => 'product', 'a' => 'index']));
         }
-        return $product;
+        return Product::hydrate($product);
     }
 
-    private function resolveCategory(array $data, string $newName): ?int
+    private function resolveCategory(array $data, string $newName, int $userId): ?int
     {
         $catId = $data['category_id'] ?? '';
         if ($catId === 'NEW' && trim($newName) !== '') {
-            return Category::create(['name' => trim($newName)]);
+            return Category::create([
+                'user_id' => $userId,
+                'name'    => trim($newName),
+            ]);
         }
-        return (is_numeric($catId) && $catId > 0) ? (int)$catId : null;
+        if (is_numeric($catId) && (int)$catId > 0) {
+            $cat = Category::findForUser($userId, (int)$catId);
+            return $cat ? (int)$catId : null;
+        }
+        return null;
     }
 
     private function requirePost(): void
@@ -351,5 +350,14 @@ class ProductController extends Controller
             $this->redirect($this->url(['c' => 'product', 'a' => 'index']));
         }
         $this->verifyCsrf();
+    }
+
+    private function verifyCsrfJson(): void
+    {
+        $sessionToken = $_SESSION['csrf_token'] ?? '';
+        $requestToken = $_POST['_token'] ?? '';
+        if ($sessionToken === '' || !hash_equals($sessionToken, $requestToken)) {
+            $this->json(['ok' => false, 'error' => '请求令牌无效，请刷新页面后重试。'], 403);
+        }
     }
 }

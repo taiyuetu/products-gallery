@@ -16,9 +16,9 @@ $galleryUrls = array_map(fn($p) => $base . '/' . ltrim($p, '/'), $gallery);
     </a>
     <div>
       <h5 class="mb-0 fw-semibold">
-        <i class="bi bi-box-seam text-primary me-1"></i><?= e($product['name'] ?? '') ?>
+        <i class="bi bi-box-seam text-primary me-1"></i><?= e($product['primary_value'] ?? ($product['name'] ?? '产品')) ?>
       </h5>
-      <small class="text-muted"><?= e($product['tqb_code'] ?? '') ?></small>
+      <small class="text-muted"><?= e($product['primary_value'] ?? '') ?></small>
     </div>
   </div>
   <div class="d-flex gap-2">
@@ -29,7 +29,7 @@ $galleryUrls = array_map(fn($p) => $base . '/' . ltrim($p, '/'), $gallery);
       <?= csrf_field() ?>
       <input type="hidden" name="id" value="<?= (int)$product['id'] ?>">
       <button type="submit" class="btn btn-outline-danger btn-sm"
-              data-confirm="确定删除「<?= e($product['tqb_code'] ?? $product['name'] ?? '') ?>」吗？">
+              data-confirm="确定删除「<?= e($product['primary_value'] ?? '') ?>」吗？">
         <i class="bi bi-trash me-1"></i>删除
       </button>
     </form>
@@ -48,7 +48,7 @@ $galleryUrls = array_map(fn($p) => $base . '/' . ltrim($p, '/'), $gallery);
       <div class="show-gallery-item lightbox-trigger"
            data-gallery='<?= e(json_encode($galleryUrls, JSON_UNESCAPED_SLASHES)) ?>'
            data-gallery-index="<?= $i ?>"
-           data-caption="<?= e(($product['tqb_code'] ?? '') . ' – ' . ($product['name'] ?? '')) ?>">
+           data-caption="<?= e(($product['primary_value'] ?? '')) ?>">
         <img src="<?= e($url) ?>" alt="产品图片 <?= $i + 1 ?>"
              class="img-fluid rounded border"
              style="max-height:200px;object-fit:contain;cursor:zoom-in;">
@@ -76,11 +76,6 @@ $galleryUrls = array_map(fn($p) => $base . '/' . ltrim($p, '/'), $gallery);
         <div class="fw-medium">
           <?php if ($val === ''): ?>
             <span class="text-muted">—</span>
-          <?php elseif ($col['field'] === 'stock_status'): ?>
-            <?php $cls = match($val) { '有货' => 'success', '缺货' => 'danger', '预订' => 'warning', default => 'secondary' }; ?>
-            <span class="badge bg-<?= $cls ?>"><?= e($val) ?></span>
-          <?php elseif ($col['field'] === 'warehouse_a'): ?>
-            <span class="badge bg-<?= $val === '可出' ? 'success' : 'secondary' ?>"><?= e($val) ?></span>
           <?php else: ?>
             <?= e($val) ?>
           <?php endif; ?>
